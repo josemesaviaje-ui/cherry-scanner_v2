@@ -1251,23 +1251,31 @@ async function findMirrors() {
     addLiveResult(`🪞 Buscando espejos para ${host}...`, 'info');
     
     try {
-        let proxy = (elements.useProxyCheck?.checked) ? getNextProxy() : null;
+        // Construir URL con query parameters (GET)
+        const url = new URL(`${API_BASE}/mirrors`);
+        url.searchParams.append('host', host);
         
-        let r = await fetch(`${API_BASE}/mirrors`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ host, proxy })
-        });
+        // Añadir proxy si está activado (opcional)
+        if (elements.useProxyCheck?.checked) {
+            url.searchParams.append('proxy', getNextProxy() || '');
+        }
+        
+        let r = await fetch(url.toString());
+        
+        if (!r.ok) {
+            throw new Error(`HTTP error! status: ${r.status}`);
+        }
         
         let d = await r.json();
         
-        if (d.success && d.mirrors.length) {
+        if (d.success && d.mirrors && d.mirrors.length) {
             d.mirrors.forEach(m => addLiveResult(`🪞 ${m.host}:${m.port} - ${m.service}`, 'mirror'));
         } else {
             addLiveResult(`⚠️ No se encontraron espejos`, 'warning');
         }
     } catch (e) {
         addLiveResult(`❌ Error: ${e.message}`, 'error');
+        showNotification('❌ Error al buscar espejos', 'error');
     }
 }
 
