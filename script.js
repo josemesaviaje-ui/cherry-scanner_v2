@@ -1,5 +1,5 @@
 // ===== CONFIGURACIÓN =====
-const API_BASE = 'https://cherry-backend-definitivo.onrender.com/api';
+const API_BASE = 'https://cherry-scanner-v2.onrender.com/api';
 let scanState = {
     isScanning: false,
     isExploiting: false,
