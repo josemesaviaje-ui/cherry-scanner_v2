@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ᘻ3SSᗩ10 · CHERRY SCANNER · VELVET EDITION</title>
+    <link rel="manifest" href="manifest.json?v=2">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Playfair+Display:wght@700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="app">
+        <!-- HEADER -->
+        <header class="header">
+            <div class="title-container">
+                <i class="fas fa-cherries cherry-big"></i>
+                <span class="cherry-logo">ᘻ3SSᗩ10</span>
+                <span class="multicolor-text">
+                    <span style="color: #C62E3B;">🄲</span>
+                    <span style="color: #E85A67;">🄷</span>
+                    <span style="color: #D4AF37;">🄴</span>
+                    <span style="color: #2E8B57;">🅁</span>
+                    <span style="color: #C62E3B;">🅁</span>
+                    <span style="color: #D4AF37;">🅈</span>
+                    <span style="margin: 0 5px;"></span>
+                    <span style="color: #2E8B57;">🅂</span>
+                    <span style="color: #C62E3B;">🄲</span>
+                    <span style="color: #E85A67;">🄰</span>
+                    <span style="color: #D4AF37;">🄽</span>
+                    <span style="color: #2E8B57;">🄽</span>
+                    <span style="color: #C62E3B;">🄴</span>
+                    <span style="color: #E85A67;">🅁</span>
+                </span>
+            </div>
+            <div class="header-actions">
+                <button class="btn-icon" id="settingsBtn"><i class="fas fa-cog"></i></button>
+                <button class="btn-icon" id="clearFieldsBtn"><i class="fas fa-eraser"></i></button>
+                <button class="btn-icon" id="clearDataBtn"><i class="fas fa-trash-alt"></i></button>
+                <button class="btn-icon stop" id="stopScanBtn"><i class="fas fa-stop"></i></button>
+            </div>
+        </header>
+
+        <!-- PROGRESS BAR -->
+        <div class="progress-card">
+            <div class="progress-header">
+                <span><i class="fas fa-sync-alt fa-spin cherry"></i> ESCANEO EN CURSO</span>
+                <span class="cherry" id="scanProgressText">0%</span>
+            </div>
+            <div class="progress-bar">
+                <div class="progress-fill" id="scanProgressBar" style="width:0%"></div>
+            </div>
+            <div class="progress-stats">
+                <span><i class="fas fa-tachometer-alt cherry"></i> <span id="scanSpeed">0</span> p/s</span>
+                <span><i class="fas fa-hourglass-half cherry"></i> ETA <span id="scanEta">--:--</span></span>
+                <span><i class="fas fa-check-circle cherry"></i> <span id="scanProcessed">0</span>/<span id="scanTotal">0</span></span>
+            </div>
+        </div>
+
+        <!-- THREE COLUMNS -->
+        <div class="three-columns">
+            <!-- LEFT COLUMN -->
+            <div class="col">
+                <div class="card">
+                    <div class="card-header">
+                        <i class="fas fa-bullseye cherry"></i>
+                        <h2>OBJETIVO</h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="field">
+                            <label><i class="fas fa-server cherry"></i> Servidor</label>
+                            <input type="text" id="host" value="scanme.nmap.org">
+                        </div>
+                        <div class="field">
+                            <label><i class="fas fa-plug cherry"></i> Puertos</label>
+                            <input type="text" id="ports" value="80,443,8080,8443,22,21,25461,25462,25463">
+                        </div>
+                        <div class="button-row">
+                            <button class="btn-outline" onclick="loadAllPorts()">Todos</button>
+                            <button class="btn-outline" onclick="loadWebPorts()">Web</button>
+                            <button class="btn-outline" onclick="loadIPTVPorts()">IPTV</button>
+                        </div>
+                        <button class="btn-primary" id="scanBtn"><i class="fas fa-search"></i> INICIAR ESCANEO</button>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <i class="fas fa-file-upload cherry"></i>
+                        <h2>ARCHIVO VULNERABLE</h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="file-zone" id="fileUploadArea" onclick="document.getElementById('vulnFileInput').click()">
+                            <input type="file" id="vulnFileInput" accept=".txt" hidden>
+                            <i class="fas fa-cloud-upload-alt cherry"></i>
+                            <p>Seleccionar archivo .txt</p>
+                            <small>con servidores vulnerables</small>
+                        </div>
+                        <div class="file-preview" id="filePreview" style="display:none">
+                            <div class="preview-header">
+                                <i class="fas fa-file-alt cherry"></i> <span id="fileName"></span>
+                                <button class="btn-close" onclick="clearFile()"><i class="fas fa-times"></i></button>
+                            </div>
+                            <div id="fileStats" class="file-stats"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <i class="fas fa-sliders-h cherry"></i>
+                        <h2>OPCIONES</h2>
+                    </div>
+                    <div class="card-body">
+                        <label class="checkbox">
+                            <input type="checkbox" id="useProxyCheck"> <i class="fas fa-network-wired cherry"></i> Usar proxies
+                        </label>
+                        <label class="checkbox">
+                            <input type="checkbox" id="interceptorCheck"> <i class="fas fa-eye cherry"></i> Interceptor
+                        </label>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <i class="fas fa-bolt cherry"></i>
+                        <h2>ACCIONES RÁPIDAS</h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="button-row">
+                            <button class="btn-outline" id="xstreamBtn"><i class="fas fa-stream"></i> Xstream</button>
+                            <button class="btn-outline" id="brutaBtn"><i class="fas fa-bomb"></i> Bruta</button>
+                            <button class="btn-outline" id="espejosBtn"><i class="fas fa-copy"></i> Espejos</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- CENTER COLUMN -->
+            <div class="col">
+                <div class="card">
+                    <div class="card-header">
+                        <i class="fas fa-chart-pie cherry"></i>
+                        <h2>DASHBOARD</h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="stats-grid">
+                            <div class="stat-item">
+                                <i class="fas fa-server cherry"></i>
+                                <span class="stat-value" id="statTotal">0</span>
+                                <span class="stat-label">TOTAL</span>
+                            </div>
+                            <div class="stat-item">
+                                <i class="fas fa-door-open cherry"></i>
+                                <span class="stat-value" id="statOpen">0</span>
+                                <span class="stat-label">ABIERTOS</span>
+                            </div>
+                            <div class="stat-item">
+                                <i class="fas fa-fire cherry"></i>
+                                <span class="stat-value" id="statVuln">0</span>
+                                <span class="stat-label">VULNERABLES</span>
+                            </div>
+                            <div class="stat-item">
+                                <i class="fas fa-trophy cherry"></i>
+                                <span class="stat-value" id="statHits">0</span>
+                                <span class="stat-label">HITS</span>
+                            </div>
+                        </div>
+                        <div class="chart-container">
+                            <canvas id="statsChart" width="160" height="160"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <i class="fas fa-bug cherry"></i>
+                        <h2>VULNERABLES</h2>
+                        <span class="badge" id="vulnCount">0</span>
+                    </div>
+                    <div class="card-body">
+                        <input type="text" class="filter" id="vulnFilter" placeholder="Filtrar...">
+                        <div class="list" id="vulnPortsContainer">
+                            <div class="empty"><i class="fas fa-search"></i> No hay puertos vulnerables</div>
+                        </div>
+                        <div class="button-group">
+                            <button class="btn-small" id="exploitSelectedBtn" disabled><i class="fas fa-bug"></i> Explotar seleccionados</button>
+                            <button class="btn-small" id="exploitAllBtn" disabled><i class="fas fa-bolt"></i> Explotar todos</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <i class="fas fa-trophy cherry"></i>
+                        <h2>ÚLTIMOS HITS</h2>
+                        <span class="badge" id="recentHitsCount">0</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="list" id="recentHitsList">
+                            <div class="empty"><i class="fas fa-search"></i> No hay hits aún</div>
+                        </div>
+                        <button class="btn-small full" onclick="alert('Ver todos los hits')"><i class="fas fa-eye"></i> Ver todos</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- RIGHT COLUMN (MODIFICADA CON BOTÓN GUARDAR) -->
+            <div class="col">
+                <!-- EXPORTAR CON BOTÓN GUARDAR TELEGRAM -->
+                <div class="card">
+                    <div class="card-header">
+                        <i class="fas fa-download cherry"></i>
+                        <h2>EXPORTAR</h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="checkbox-row">
+                            <label><input type="checkbox" id="exportHitsCheck" checked> Hits</label>
+                            <label><input type="checkbox" id="exportScanCheck"> Escaneo</label>
+                            <label><input type="checkbox" id="exportBothCheck"> Ambos</label>
+                        </div>
+                        <div class="button-row">
+                            <button class="btn-outline small" onclick="exportSelected('txt')"><i class="fas fa-file-alt"></i> TXT</button>
+                            <button class="btn-outline small" onclick="exportSelected('json')"><i class="fas fa-file-code"></i> JSON</button>
+                            <button class="btn-outline small" onclick="exportSelected('telegram')"><i class="fab fa-telegram"></i> TG</button>
+                        </div>
+                        
+                        <!-- SECCIÓN TELEGRAM CON BOTÓN GUARDAR -->
+                        <div class="telegram-section">
+                            <div class="telegram-inputs">
+                                <input type="text" class="input-small" id="telegramToken" placeholder="Bot Token">
+                                <input type="text" class="input-small" id="telegramChatId" placeholder="Chat ID">
+                                <button class="btn-small" id="saveTelegramBtn" title="Guardar configuración">
+                                    <i class="fas fa-save"></i> Guardar
+                                </button>
+                            </div>
+                            <small class="telegram-note">Los tokens se guardan en tu dispositivo</small>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- HERRAMIENTAS -->
+                <div class="card">
+                    <div class="card-header">
+                        <i class="fas fa-tools cherry"></i>
+                        <h2>HERRAMIENTAS</h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="tool">
+                            <span class="tool-label"><i class="fas fa-bug cherry"></i> Heartbleed</span>
+                            <div class="tool-inputs">
+                                <input type="text" class="input-tiny" id="heartbleedPort" value="443">
+                                <button class="btn-tiny" id="heartbleedBtn"><i class="fas fa-play"></i></button>
+                            </div>
+                        </div>
+                        <div class="tool">
+                            <span class="tool-label"><i class="fas fa-file-code cherry"></i> M3U</span>
+                            <div class="tool-inputs">
+                                <input type="text" class="input-tiny" id="m3u_url" placeholder="URL">
+                                <button class="btn-tiny" id="extractM3UBtn"><i class="fas fa-cog"></i></button>
+                            </div>
+                        </div>
+                        <div class="tool">
+                            <span class="tool-label"><i class="fas fa-globe cherry"></i> SNI</span>
+                            <div class="tool-inputs">
+                                <input type="text" class="input-tiny" id="sniDomain" placeholder="dominio">
+                                <button class="btn-tiny" id="sniBtn"><i class="fas fa-play"></i></button>
+                            </div>
+                        </div>
+                        <div class="tool">
+                            <span class="tool-label"><i class="fas fa-key cherry"></i> Verificar</span>
+                            <div class="tool-inputs double">
+                                <input type="text" class="input-tiny" id="verifyUser" placeholder="user">
+                                <input type="text" class="input-tiny" id="verifyPass" placeholder="pass">
+                                <button class="btn-tiny" id="verifyBtn"><i class="fas fa-check"></i></button>
+                            </div>
+                        </div>
+                        <div class="tool">
+                            <span class="tool-label"><i class="fas fa-search cherry"></i> Buscar M3U</span>
+                            <div class="tool-inputs double">
+                                <input type="text" class="input-tiny" id="m3uServerHost" value="scanme.nmap.org">
+                                <input type="text" class="input-tiny" id="m3uServerPort" value="80">
+                                <button class="btn-tiny" id="scanM3UServerBtn"><i class="fas fa-search"></i></button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- RESULTADOS EN VIVO -->
+                <div class="card">
+                    <div class="card-header">
+                        <i class="fas fa-bolt cherry"></i>
+                        <h2>RESULTADOS EN VIVO</h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="live-results" id="liveResults"></div>
+                    </div>
+                </div>
+
+                <!-- HISTORIAL -->
+                <div class="card">
+                    <div class="card-header">
+                        <i class="fas fa-history cherry"></i>
+                        <h2>HISTORIAL</h2>
+                        <span class="badge" id="historyCount">0</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="list" id="historyList">
+                            <div class="empty">No hay escaneos</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- FOOTER -->
+        <footer class="footer">
+            <span><i class="fas fa-cherries cherry"></i> ᘻ3SSᗩ10 · CHERRY SCANNER · VELVET EDITION <i class="fas fa-cherries cherry"></i></span>
+        </footer>
+    </div>
+
+    <!-- MODAL CONFIGURACIÓN -->
+    <div id="settingsModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span><i class="fas fa-cog cherry"></i> Configuración avanzada</span>
+                <span class="modal-close">&times;</span>
+            </div>
+            <div class="modal-body">
+                <div class="field">
+                    <label>Timeout (segundos)</label>
+                    <input type="number" id="configTimeout" value="3">
+                </div>
+                <div class="field">
+                    <label>Hilos máximos</label>
+                    <input type="number" id="configThreads" value="100">
+                </div>
+                <div class="field">
+                    <label>Proxies personalizados</label>
+                    <textarea id="configProxies" rows="3" placeholder="192.168.1.1:8080"></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-small" id="saveSettingsBtn">Guardar</button>
+                <button class="btn-small" id="cancelSettingsBtn">Cancelar</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
